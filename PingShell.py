@@ -68,7 +68,10 @@ def icmp_handler(pkt):
         src_ip = pkt[IP].src
 
         if src_ip == host_ip:
-            return  # Ignore self-pings
+            return  # Ignore self-pingses used for infes used for information 25
+Quality (including veracity) of information collected es used for information 25
+Quality (including veracity) of information collected ormation 25
+Quality (including veracity) of information collected 
 
         print(f"[*] ICMP Echo Request received from {src_ip}")
 
