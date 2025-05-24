@@ -10,6 +10,10 @@ ping_log = deque(maxlen=128)
 # Time between pings 
 MAX_TIME_GAP = 3.0
 
+def flip_bits(bits):
+    """Flip each bit in the binary string."""
+    return ''.join('1' if b == '0' else '0' for b in bits)
+
 def packet_handler(pkt):
     if ICMP in pkt and pkt[ICMP].type == 8:  # Echo
         timestamp = time.time()
@@ -39,8 +43,26 @@ def find_ip_pairs(ping_log):
 
     return alt_counts.most_common(2)  # top pairs
 
+def binary_to_text(binary_str):
+    print(f"[DEBUG] Starting binary_to_text with input: {binary_str}")
+    # Ensure the binary string length is a multiple of 8
+    if len(binary_str) % 8 != 0:
+        print(f"[!] Warning: Incomplete byte detected! Binary length: {len(binary_str)}")
+        binary_str = binary_str[:-(len(binary_str) % 8)]  # Trim off incomplete bits
+    try:
+        # Split the binary string into 8-bit chunks
+        chunks = [binary_str[i:i+8] for i in range(0, len(binary_str), 8)]
+        print(f"[DEBUG] Binary chunks: {chunks}")
+        # Convert each chunk to the corresponding character
+        text = "".join(chr(int(chunk, 2)) for chunk in chunks)
+        print(f"[DEBUG] Converted text: {repr(text)}")
+        return text
+    except ValueError as e:
+        print(f"[!] Error in binary conversion: {e}")
+        return None
+
 def analyze_binary_stream(ip1, ip2):
-    """Turn filtered ping pattern into binary string"""
+    """Turn filtered ping pattern into binary string and analyze variants"""
     bits = ''
     prev_time = None
     relevant_pings = [(t, ip) for t, ip in ping_log if ip in {ip1, ip2}]
@@ -48,19 +70,40 @@ def analyze_binary_stream(ip1, ip2):
     for t, ip in relevant_pings:
         bit = '1' if ip == ip1 else '0'
         if prev_time is not None and t - prev_time > MAX_TIME_GAP:
-            bits += ' '  
+            bits += ' '
         bits += bit
         prev_time = t
 
     print(f"[!] Stream between {ip1} (1) and {ip2} (0): {bits}")
     chunks = bits.split()
+
     for chunk in chunks:
         if len(chunk) >= 8:
-            try:
-                decoded = ''.join(chr(int(chunk[i:i+8], 2)) for i in range(0, len(chunk), 8))
+            print(f"    → Original bits: {chunk}")
+            decoded = binary_to_text(chunk)
+            if decoded:
                 print(f"    → Decoded: {decoded}")
-            except Exception:
-                continue
+
+            # Flip bits
+            flipped = flip_bits(chunk)
+            print(f"    → Flipped bits: {flipped}")
+            flipped_decoded = binary_to_text(flipped)
+            if flipped_decoded:
+                print(f"    → Flipped Decoded: {flipped_decoded}")
+
+            # Reverse bits
+            reversed_chunk = chunk[::-1]
+            print(f"    → Reversed bits: {reversed_chunk}")
+            reversed_decoded = binary_to_text(reversed_chunk)
+            if reversed_decoded:
+                print(f"    → Reversed Decoded: {reversed_decoded}")
+
+            # Flip and reverse
+            flipped_reversed = flip_bits(reversed_chunk)
+            print(f"    → Flipped & Reversed bits: {flipped_reversed}")
+            flipped_reversed_decoded = binary_to_text(flipped_reversed)
+            if flipped_reversed_decoded:
+                print(f"    → Flipped & Reversed Decoded: {flipped_reversed_decoded}")
 
 def monitor_loop():
     while True:
@@ -80,5 +123,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 
